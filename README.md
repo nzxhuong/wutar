@@ -1,4 +1,4 @@
-# Ocean Wave Simulation
+# Ocean Simulation
 
 A real-time ocean wave simulation using JONSWAP spectrum and Fast Fourier Transform (FFT) for realistic water rendering.
 
