@@ -9,9 +9,9 @@ V_speed = 20
 
 wind_dir = [1, 0]  
 
-cam_pos_initial = [0.0, 0.3, 0.5]
-cam_yaw_initial = 0.0
-cam_pitch_initial = -0.5
+cam_pos_initial = [-0.12474702, 0.20126344, -0.7043775]
+cam_yaw_initial = 1.5600000000000012
+cam_pitch_initial = -0.34999999999999987
 move_speed = 0.02
 rot_speed = 0.03
 

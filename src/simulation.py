@@ -23,16 +23,23 @@ class WaveSimulation:
     
     def update(self, t):
         """
-        Update wave simulation for time t and return height data.
+        Update wave simulation for time t and return height and displacement data.
         
         Args:
             t (float): Current time
             
         Returns:
-            np.ndarray: 2D array of height values as float32
+            tuple: (height_data, displacement_data) as float32 arrays
         """
         h0_t = self.h0 * np.exp(1j * self.omega * t)
         
         height_data = np.real(np.fft.ifft2(np.fft.ifftshift(h0_t)))
         
-        return height_data.astype('f4')
+        # Calculate displacement for choppy waves
+        dx_disp = -1j * (self.uu/self.u_nag) * h0_t
+        dx_data = np.real(np.fft.ifft2(np.fft.ifftshift(dx_disp)))
+        dz_disp = -1j * (self.vv/self.u_nag) * h0_t
+        dz_data = np.real(np.fft.ifft2(np.fft.ifftshift(dz_disp)))
+        disp_data = np.stack([dx_data, dz_data], axis=-1)
+        
+        return height_data.astype('f4'), disp_data.astype('f4')
