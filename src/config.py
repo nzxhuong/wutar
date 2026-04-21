@@ -5,9 +5,14 @@ L = 1000.0
 G = 9.81    
 A = 0.01    
 t = 0.0     
-V_speed = 25  
+V_speed = 500  
 
-wind_dir = [1, 0]  
+wind_dir = [1.0, 1.0]
+
+FETCH = 1_000_000.0  
+GAMMA = 3.3          
+ALPHA_COEFF = 0.076
+OMEGA_P_COEFF = 22  
 
 cam_pos_initial = [-0.12474702, 0.20126344, -0.7043775]
 cam_yaw_initial = 1.5600000000000012

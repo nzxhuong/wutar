@@ -4,12 +4,10 @@ from config import *
 class Camera:
     def __init__(self):
         """Initialize camera with default position and orientation."""
-        # Camera state
         self.pos = np.array(cam_pos_initial, dtype='f4')
         self.yaw = cam_yaw_initial
         self.pitch = cam_pitch_initial
         
-        # Movement vectors
         self.world_up = np.array([0, 1, 0], dtype='f4')
     
     @staticmethod
