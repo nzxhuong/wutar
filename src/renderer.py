@@ -54,6 +54,7 @@ class WaveRenderer:
     def _setup_textures(self):
         self.height_tex = self.ctx.texture((GRID_SIZE, GRID_SIZE), 1, dtype='f4')
         self.height_tex_dx = self.ctx.texture((GRID_SIZE, GRID_SIZE), 2, dtype='f4')
+        self.normal_tex = self.ctx.texture((GRID_SIZE, GRID_SIZE), 2, dtype='f4')
         
         self.fbo = self.ctx.framebuffer(
             color_attachments=[self.ctx.texture((W, H), 4)], 
@@ -65,9 +66,10 @@ class WaveRenderer:
         light_vec /= np.linalg.norm(light_vec)
         self.prog['light_vector'].write(light_vec)
     
-    def draw(self, height_data, displacement_data, model_matrix, view_matrix, proj_matrix, cam_pos):
+    def draw(self, height_data, displacement_data, normal_data, model_matrix, view_matrix, proj_matrix, cam_pos):
         self.height_tex.write(height_data.tobytes())
         self.height_tex_dx.write(displacement_data.tobytes())
+        self.normal_tex.write(normal_data.tobytes())
         
         self.fbo.use()
         self.ctx.clear(0.1, 0.1, 0.1)
@@ -75,9 +77,11 @@ class WaveRenderer:
         
         self.height_tex.use(location=0)
         self.height_tex_dx.use(location=1)
+        self.normal_tex.use(location=2)
         
         self.prog['height_map'].value = 0
         self.prog['height_map_dx'].value = 1
+        self.prog['normal_map'].value = 2
         self.prog['model'].write(model_matrix)
         self.prog['view'].write(view_matrix)
         self.prog['proj'].write(proj_matrix)

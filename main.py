@@ -16,7 +16,7 @@ def main():
     
     t = 0.0
     
-    print("Controls: WASD=Move, E=Up, R=Down, IJKL=Look, Q=Quit")
+    print("Q=Quit")
     
     try:
         while True:
@@ -25,13 +25,13 @@ def main():
             if camera.handle_input(key):
                 break
             
-            height_map, displacement_map = simulation.update(t)
+            height_map, displacement_map, normal_map = simulation.update(t)
             
             model = np.eye(4, dtype='f4')
             view = camera.get_view_matrix()
             proj = Camera.perspective(np.radians(fov_degrees), W/H, near_plane, far_plane)
             
-            renderer.draw(height_map, displacement_map, model, view, proj, camera.pos)
+            renderer.draw(height_map, displacement_map, normal_map, model, view, proj, camera.pos)
             
             image = renderer.get_image()
             cv2.imshow("Wave", image)

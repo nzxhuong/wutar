@@ -5,7 +5,7 @@ L = 1000.0
 G = 9.81    
 A = 0.01    
 t = 0.0     
-V_speed = 20  
+V_speed = 25  
 
 wind_dir = [1, 0]  
 
