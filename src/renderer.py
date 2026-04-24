@@ -30,8 +30,8 @@ class WaveRenderer:
             raise e
     
     def _setup_geometry(self):
-        x = np.linspace(-1, 1, GRID_SIZE)
-        y = np.linspace(-1, 1, GRID_SIZE)
+        x = np.linspace(-L/2, L/2, GRID_SIZE)
+        y = np.linspace(-L/2, L/2, GRID_SIZE)
         xx, yy = np.meshgrid(x, y)
         vertices = np.stack([xx.ravel(), yy.ravel()], axis=-1).astype('f4')
         
@@ -82,6 +82,7 @@ class WaveRenderer:
         self.prog['height_map'].value = 0
         self.prog['height_map_dx'].value = 1
         self.prog['normal_map'].value = 2
+        self.prog['L'].value = L
         self.prog['model'].write(model_matrix)
         self.prog['view'].write(view_matrix)
         self.prog['proj'].write(proj_matrix)
