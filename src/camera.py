@@ -56,23 +56,7 @@ class Camera:
         return forward, right
     
     def handle_input(self, key):
-        """Handle keyboard input to update camera position and rotation."""
-        forward, right = self.get_direction_vectors()
-        
-        if key == ord('w'): self.pos += forward * move_speed
-        if key == ord('s'): self.pos -= forward * move_speed
-        if key == ord('a'): self.pos -= right * move_speed
-        if key == ord('d'): self.pos += right * move_speed
-        if key == ord('e'): self.pos[1] += move_speed
-        if key == ord('r'): self.pos[1] -= move_speed
-        
-        if key == ord('i'): self.pitch += rot_speed
-        if key == ord('k'): self.pitch -= rot_speed
-        if key == ord('j'): self.yaw -= rot_speed
-        if key == ord('l'): self.yaw += rot_speed
-        
-        self.pitch = np.clip(self.pitch, -np.pi/2 + 0.1, np.pi/2 - 0.1)
-        
+        """Handle keyboard input - only quit functionality."""
         return key == ord('q')
     
     def get_view_matrix(self):
