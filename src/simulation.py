@@ -21,7 +21,6 @@ class WaveSimulation:
         xi_r1, xi_i1 = np.random.randn(2, GRID_SIZE, GRID_SIZE)
         self.h0 = (1 / np.sqrt(2)) * (xi_r1 + 1j * xi_i1) * np.sqrt(self.P)
         
-        # Add conjugate spectrum for wave symmetry
         self.h0_conj = np.conj(self.h0)
     
     def update(self, t):
