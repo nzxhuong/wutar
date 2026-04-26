@@ -12,11 +12,11 @@ out vec3 v_normal;
 out vec3 v_pos;
 void main() {
     vec2 ub = (in_pos / L) + 0.5;
-    vec2 displacement = texture(height_map_dx, ub).rg;
-    float y = texture(height_map, ub).r;
-    vec2 grad = texture(normal_map, ub).rg;
+    vec2 displacement = texture(height_map_dx, ub).xy;
+    float y = texture(height_map, ub).x;
+    vec2 grad = texture(normal_map, ub).xy;
     v_normal = normalize(vec3(-grad.x, 1.0, -grad.y));
     v_height = y;
-    v_pos = vec3(in_pos.x + displacement.x, y * 10, in_pos.y + displacement.y);
+    v_pos = vec3(in_pos.x + displacement.x, y, in_pos.y + displacement.y);
     gl_Position = proj * view * model * vec4(v_pos, 1.0);
 }

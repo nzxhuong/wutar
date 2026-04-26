@@ -12,6 +12,7 @@ class WaveSimulation:
         self.P = np.zeros((GRID_SIZE, GRID_SIZE))
         k_m = self.u_nag[self.mask]
         wind_dir_np = np.array(wind_dir)
+        wind_dir_np /= np.linalg.norm(wind_dir_np)
         dot = (self.uu[self.mask]/k_m)*wind_dir_np[0] + (self.vv[self.mask]/k_m)*wind_dir_np[1]
         self.P[self.mask] = A * (np.exp(-1 / (k_m * (V_speed**2 / G))**2) / k_m**4) * (dot**2)
         
@@ -33,14 +34,12 @@ class WaveSimulation:
         Returns:
             tuple: (height_data, displacement_data, normal_data) as float32 arrays
         """
-        # Use conjugate spectrum for wave symmetry
         h0_t = self.h0 * np.exp(1j * self.omega * t) + self.h0_conj * np.exp(-1j * self.omega * t)
         
-        height_data = np.real(np.fft.ifft2(h0_t))
+        height_data = np.real(np.fft.ifft2(h0_t)) * 10.0
         
-        # Calculate displacement for choppy waves
-        kx_norm = np.where(self.mask, self.uu / self.u_nag, 0)
-        kz_norm = np.where(self.mask, self.vv / self.u_nag, 0)
+        kx_norm = np.where(self.mask, self.uu / self.u_nag, 0) * CHOPPY_FACTOR
+        kz_norm = np.where(self.mask, self.vv / self.u_nag, 0) * CHOPPY_FACTOR
         
         dx_disp = -1j * kx_norm * h0_t
         dx_data = np.real(np.fft.ifft2(dx_disp))
@@ -48,11 +47,10 @@ class WaveSimulation:
         dz_data = np.real(np.fft.ifft2(dz_disp))
         disp_data = np.stack([dx_data, dz_data], axis=-1)
         
-        # Calculate gradient-based normal map
-        grad_x_freq = 1j * self.uu * h0_t
-        grad_x_data = np.real(np.fft.ifft2(grad_x_freq))
-        grad_z_freq = 1j * self.vv * h0_t
-        grad_z_data = np.real(np.fft.ifft2(grad_z_freq))
-        normal_data = np.stack([grad_x_data, grad_z_data], axis=-1)
-        
+        h_dx = np.roll(height_data, -1, axis=1) - np.roll(height_data, 1, axis=1)
+        h_dz = np.roll(height_data, -1, axis=0) - np.roll(height_data, 1, axis=0)
+        texel_world = 2.0 * L / GRID_SIZE
+        h_dx /= texel_world
+        h_dz /= texel_world
+        normal_data = np.stack([h_dx, h_dz], axis=-1)
         return height_data.astype('f4'), disp_data.astype('f4'), normal_data.astype('f4')
