@@ -2,21 +2,19 @@
 uniform mat4 model;
 uniform mat4 view;
 uniform mat4 proj;
-uniform float L;
+uniform float WORLD_L;
 uniform sampler2D height_map;
 uniform sampler2D height_map_dx;
-uniform sampler2D normal_map;
 in vec2 in_pos; 
 out float v_height;
-out vec3 v_normal;
+out vec2 v_uv;
 out vec3 v_pos;
 void main() {
-    vec2 ub = (in_pos / L) + 0.5;
-    vec2 displacement = texture(height_map_dx, ub).xy;
-    float y = texture(height_map, ub).x;
-    vec2 grad = texture(normal_map, ub).xy;
-    v_normal = normalize(vec3(-grad.x, 1.0, -grad.y));
-    v_height = y;
+    vec2 uv = (in_pos / WORLD_L) + 0.5;
+    v_uv = uv;
+    vec2 displacement = texture(height_map_dx, uv).xy;
+    float y = texture(height_map, uv).r;
     v_pos = vec3(in_pos.x + displacement.x, y, in_pos.y + displacement.y);
+    v_height = y;
     gl_Position = proj * view * model * vec4(v_pos, 1.0);
 }

@@ -1,21 +1,25 @@
-import cv2
 import moderngl
 import numpy as np
 from config import *
 
 class WaveRenderer:
-    def __init__(self):
-        self.ctx = moderngl.create_standalone_context()
+    def __init__(self, ctx):
+        """Initialize renderer with existing ModernGL context (from GLFW)."""
+        self.ctx = ctx
         
         self._load_shaders()
         
         self.prog = self.ctx.program(vertex_shader=self.vertex_shader, 
                                    fragment_shader=self.fragment_shader)
+        self.prog_obj = self.ctx.program(vertex_shader=self.obj_vertex_shader,
+                                       fragment_shader=self.obj_fragment_shader)
+        self.prog_screen = self.ctx.program(vertex_shader=self.screen_vertex_shader,
+                                          fragment_shader=self.screen_fragment_shader)
         
         self._setup_geometry()
-        
+        self._setup_object_geometry()
+        self._setup_screen_quad()
         self._setup_textures()
-        
         self._setup_lighting()
     
     def _load_shaders(self):
@@ -25,6 +29,14 @@ class WaveRenderer:
                 self.vertex_shader = f.read()
             with open('shaders/fragment.glsl', 'r') as f:
                 self.fragment_shader = f.read()
+            with open('shaders/obj_vertex.glsl', 'r') as f:
+                self.obj_vertex_shader = f.read()
+            with open('shaders/obj_fragment.glsl', 'r') as f:
+                self.obj_fragment_shader = f.read()
+            with open('shaders/screen_vertex.glsl', 'r') as f:
+                self.screen_vertex_shader = f.read()
+            with open('shaders/screen_fragment.glsl', 'r') as f:
+                self.screen_fragment_shader = f.read()
         except FileNotFoundError as e:
             print(f"Error loading shaders: {e}")
             raise e
@@ -51,38 +63,66 @@ class WaveRenderer:
         self.vao = self.ctx.vertex_array(self.prog, [(self.vbo, '2f', 'in_pos')], 
                                         index_buffer=self.ibo)
     
+    def _setup_object_geometry(self):
+        """Setup boat/obstruction object geometry (cube)."""
+        obj_verts = np.array([
+            -1,-1, 1,  0,0,1,   1,-1, 1,  0,0,1,   1, 1, 1,  0,0,1,  -1, 1, 1,  0,0,1,
+            -1,-1,-1,  0,0,-1, -1, 1,-1,  0,0,-1,  1, 1,-1,  0,0,-1,  1,-1,-1,  0,0,-1,
+            -1, 1,-1,  0,1,0,   -1, 1, 1,  0,1,0,   1, 1, 1,  0,1,0,   1, 1,-1,  0,1,0,
+            -1,-1,-1,  0,-1,0,  1,-1,-1,  0,-1,0,   1,-1, 1,  0,-1,0,  -1,-1, 1,  0,-1,0,
+            -1,-1,-1, -1,0,0,  -1, 1,-1, -1,0,0,  -1, 1, 1, -1,0,0,  -1,-1, 1, -1,0,0,
+             1,-1,-1,  1,0,0,   1, 1,-1,  1,0,0,   1, 1, 1,  1,0,0,   1,-1, 1,  1,0,0,
+        ], dtype='f4')
+        
+        obj_indices = np.array([
+            0,1,2, 0,2,3, 4,5,6, 4,6,7, 8,9,10, 8,10,11, 
+            12,13,14, 12,14,15, 16,17,18, 16,18,19, 20,21,22, 20,22,23
+        ], dtype='i4')
+        
+        self.obj_vbo = self.ctx.buffer(obj_verts)
+        self.obj_ibo = self.ctx.buffer(obj_indices)
+        self.obj_vao = self.ctx.vertex_array(self.prog_obj, 
+                                             [(self.obj_vbo, '3f 3f', 'in_vert', 'in_norm')], 
+                                             index_buffer=self.obj_ibo)
+    
+    def _setup_screen_quad(self):
+        """Setup full-screen quad for FBO blit."""
+        screen_quad = np.array([-1, -1, 1, -1, -1, 1, 1, 1], dtype='f4')
+        self.screen_vbo = self.ctx.buffer(screen_quad)
+        self.screen_vao = self.ctx.vertex_array(self.prog_screen, 
+                                                [(self.screen_vbo, '2f', 'in_pos')])
+    
     def _setup_textures(self):
         self.height_tex = self.ctx.texture((GRID_SIZE, GRID_SIZE), 1, dtype='f4')
         self.height_tex_dx = self.ctx.texture((GRID_SIZE, GRID_SIZE), 2, dtype='f4')
-        self.normal_tex = self.ctx.texture((GRID_SIZE, GRID_SIZE), 2, dtype='f4')
         
         self.fbo = self.ctx.framebuffer(
             color_attachments=[self.ctx.texture((W, H), 4)], 
             depth_attachment=self.ctx.depth_renderbuffer((W, H))
         )
+        self.fbo_color_tex = self.fbo.color_attachments[0]
     
     def _setup_lighting(self):
         light_vec = np.array(light_vector, dtype='f4')
         light_vec /= np.linalg.norm(light_vec)
         self.prog['light_vector'].write(light_vec)
+        self.prog_obj['light_vector'].write(light_vec)
     
-    def draw(self, height_data, displacement_data, normal_data, model_matrix, view_matrix, proj_matrix, cam_pos):
+    def draw_ocean(self, height_data, displacement_data, model_matrix, view_matrix, proj_matrix, cam_pos):
+        """Draw the ocean surface."""
         self.height_tex.write(height_data.tobytes())
         self.height_tex_dx.write(displacement_data.tobytes())
-        self.normal_tex.write(normal_data.tobytes())
         
         self.fbo.use()
-        self.ctx.clear(0.1, 0.1, 0.1)
+        self.ctx.clear(0.05, 0.08, 0.15)
         self.ctx.enable(moderngl.DEPTH_TEST)
         
         self.height_tex.use(location=0)
         self.height_tex_dx.use(location=1)
-        self.normal_tex.use(location=2)
         
         self.prog['height_map'].value = 0
         self.prog['height_map_dx'].value = 1
-        self.prog['normal_map'].value = 2
-        self.prog['L'].value = L
+        self.prog['WORLD_L'].value = L
         self.prog['model'].write(model_matrix)
         self.prog['view'].write(view_matrix)
         self.prog['proj'].write(proj_matrix)
@@ -90,16 +130,34 @@ class WaveRenderer:
         
         self.vao.render(moderngl.TRIANGLES)
     
-    def get_image(self):
-        raw = self.fbo.read(components=4)
-        image = np.frombuffer(raw, dtype='u1').reshape((H, W, 4))
-        image = cv2.cvtColor(image, cv2.COLOR_RGBA2BGR)
-        return np.flipud(image)
+    def draw_object(self, obj_model, view_matrix, proj_matrix):
+        """Draw the boat/obstruction object."""
+        self.prog_obj['model'].write(np.ascontiguousarray(obj_model.T))
+        self.prog_obj['view'].write(view_matrix)
+        self.prog_obj['proj'].write(proj_matrix)
+        self.obj_vao.render(moderngl.TRIANGLES)
+    
+    def blit_to_screen(self):
+        """Blit FBO to screen (zero-copy)."""
+        self.ctx.screen.use()
+        self.ctx.clear(0.05, 0.08, 0.15)
+        
+        self.fbo_color_tex.use(location=0)
+        self.prog_screen['screen_tex'].value = 0
+        
+        self.screen_vao.render(moderngl.TRIANGLE_STRIP)
     
     def cleanup(self):
         self.vbo.release()
         self.ibo.release()
         self.vao.release()
+        self.obj_vbo.release()
+        self.obj_ibo.release()
+        self.obj_vao.release()
+        self.screen_vbo.release()
+        self.screen_vao.release()
         self.height_tex.release()
         self.fbo.release()
         self.prog.release()
+        self.prog_obj.release()
+        self.prog_screen.release()

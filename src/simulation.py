@@ -1,27 +1,127 @@
 import numpy as np
+import torch
+import torch.nn.functional as F
 from config import *
 
 class WaveSimulation:
     def __init__(self):
-        """Initialize wave simulation with spectrum calculation."""
-        self.u = np.fft.fftfreq(GRID_SIZE, d=1.0/GRID_SIZE) * ((2 * np.pi) / L)
-        self.uu, self.vv = np.meshgrid(self.u, self.u)  
-        self.u_nag = np.sqrt(self.uu**2 + self.vv**2)
-        self.mask = self.u_nag > 0
+        """Initialize wave simulation with spectrum calculation on GPU."""
+        u_coords = (torch.fft.fftfreq(GRID_SIZE, d=1.0/GRID_SIZE, device=device)
+                    * (2 * torch.pi / L))
+        uu, vv = torch.meshgrid(u_coords, u_coords, indexing='ij')
+        self.uu = uu
+        self.vv = vv
+        u_nag = torch.sqrt(uu**2 + vv**2)
+        self.mask = u_nag > 0
         
-        self.P = np.zeros((GRID_SIZE, GRID_SIZE))
-        k_m = self.u_nag[self.mask]
-        wind_dir_np = np.array(wind_dir)
-        wind_dir_np /= np.linalg.norm(wind_dir_np)
-        dot = (self.uu[self.mask]/k_m)*wind_dir_np[0] + (self.vv[self.mask]/k_m)*wind_dir_np[1]
-        self.P[self.mask] = A * (np.exp(-1 / (k_m * (V_speed**2 / G))**2) / k_m**4) * (dot**2)
+        p_spectrum = torch.zeros((GRID_SIZE, GRID_SIZE), device=device)
+        k_hat_x = torch.where(self.mask, uu / u_nag, torch.zeros_like(uu))
+        k_hat_z = torch.where(self.mask, vv / u_nag, torch.zeros_like(vv))
+        self.k_hat_x = k_hat_x
+        self.k_hat_z = k_hat_z
         
-        self.omega = np.sqrt(G * self.u_nag)
+        wind_dir_tensor = torch.tensor(wind_dir, dtype=torch.float32, device=device)
+        wind_dir_tensor /= torch.linalg.norm(wind_dir_tensor)
+        dot_product = k_hat_x * wind_dir_tensor[0] + k_hat_z * wind_dir_tensor[1]
         
-        xi_r1, xi_i1 = np.random.randn(2, GRID_SIZE, GRID_SIZE)
-        self.h0 = (1 / np.sqrt(2)) * (xi_r1 + 1j * xi_i1) * np.sqrt(self.P)
+        L_val = (WIND_SPEED**2) / G
+        p_spectrum[self.mask] = (
+            A * torch.exp(-1.0 / (u_nag[self.mask] * L_val)**2)
+            / (u_nag[self.mask]**4)
+        ) * (dot_product[self.mask]**2)
         
-        self.h0_conj = np.conj(self.h0)
+        omega_vals = torch.sqrt(G * u_nag)
+        self.omega_vals = omega_vals
+        
+        xi_r1 = torch.randn(GRID_SIZE, GRID_SIZE, device=device)
+        xi_i1 = torch.randn(GRID_SIZE, GRID_SIZE, device=device)
+        h0 = (1 / np.sqrt(2)) * (xi_r1 + 1j * xi_i1) * torch.sqrt(p_spectrum)
+        self.h0 = h0
+        self.h0_conj = torch.conj(h0)
+        
+        self.kernel_tensor = self._get_ker_weight_torch(P=6, sigma=1.0)
+        
+        self.local_height = torch.zeros((1, 1, GRID_SIZE, GRID_SIZE), device=device)
+        self.prev_height = torch.zeros((1, 1, GRID_SIZE, GRID_SIZE), device=device)
+        self.obstruction = torch.ones((1, 1, GRID_SIZE, GRID_SIZE), device=device)
+        
+        self.obs_pos = torch.tensor([GRID_SIZE/2.0, GRID_SIZE/2.0],
+                                    dtype=torch.float32, device=device)
+        self.obs_vel = torch.zeros(2, dtype=torch.float32, device=device)
+        
+        self.kernel_2d = self._gaussian_kernel_2d(5, 1.0)
+        self.pad_g = self.kernel_2d.shape[-1] // 2
+        
+        y_g = torch.arange(GRID_SIZE, device=device).float()
+        x_g = torch.arange(GRID_SIZE, device=device).float()
+        yy0, xx0 = torch.meshgrid(y_g, x_g, indexing='ij')
+        self.obstruction[0, 0, (torch.abs(xx0 - self.obs_pos[0]) < 10) & 
+                              (torch.abs(yy0 - self.obs_pos[1]) < 25)] = 0.0
+        
+        denom = 1.0 + ALPHA * DT
+        self.C1 = (2.0 - ALPHA * DT) / denom
+        self.C2 = 1.0 / denom
+        self.C3 = (G * DT**2) / denom
+        
+        self.obstruction_dirty = True
+        self.blured_obstruction = None
+        self.source_term = None
+    
+    def _get_ker_weight_torch(self, P=6, sigma=1.0):
+        k = torch.arange(-P, P + 1, dtype=torch.float32, device=device)
+        K, L_mesh = torch.meshgrid(k, k, indexing='ij')
+        r = torch.sqrt(K**2 + L_mesh**2)
+        q = torch.arange(1, 10001, dtype=torch.float32, device=device) * 0.001
+        q3d, r3d = q[:, None, None], r[None, :, :]
+        G_val = (q3d**2 * torch.exp(-sigma * q3d**2)
+                 * torch.special.bessel_j0(q3d * r3d)).sum(dim=0)
+        G_val /= G_val[P, P].clone()
+        return G_val.view(1, 1, 2*P+1, 2*P+1)
+    
+    def _gaussian_kernel_2d(self, size, sigma):
+        k = size // 2
+        x = torch.arange(-k, k+1).float().to(device)
+        g = torch.exp(-x**2 / (2*sigma**2))
+        g /= g.sum()
+        return (g[:, None] * g[None, :]).view(1, 1, size, size)
+    
+    def update_obstruction(self, mouse_target=None):
+        """Update obstruction position based on mouse target."""
+        pos_changed = False
+        
+        if mouse_target is not None:
+            target = torch.tensor(mouse_target, dtype=torch.float32, device=device)
+            diff = target - self.obs_pos
+            if torch.linalg.norm(diff) > 0.1:
+                self.obs_pos += diff * 0.35
+                self.obs_vel = diff / DT
+                pos_changed = True
+            else:
+                self.obs_vel = torch.zeros(2, device=device)
+        else:
+            if torch.linalg.norm(self.obs_vel) > 0.1:
+                self.obs_vel *= 0.85
+                self.obs_pos += self.obs_vel * DT
+                pos_changed = True
+            else:
+                self.obs_vel = torch.zeros(2, device=device)
+        
+        if pos_changed:
+            self.obstruction.fill_(1.0)
+            y_g2 = torch.arange(GRID_SIZE, device=device).float()
+            x_g2 = torch.arange(GRID_SIZE, device=device).float()
+            yy2, xx2 = torch.meshgrid(y_g2, x_g2, indexing='ij')
+            mask = (torch.abs(xx2 - self.obs_pos[1]) < 10) & \
+                   (torch.abs(yy2 - self.obs_pos[0]) < 25)
+            self.obstruction[0, 0, mask] = 0.0
+            self.obstruction_dirty = True
+        
+        if self.obstruction_dirty:
+            self.blured_obstruction = F.conv2d(
+                F.pad(self.obstruction, (self.pad_g, self.pad_g, self.pad_g, self.pad_g), mode='circular'),
+                self.kernel_2d, padding=0)
+            self.source_term = 1.0 - self.blured_obstruction
+            self.obstruction_dirty = False
     
     def update(self, t):
         """
@@ -33,23 +133,40 @@ class WaveSimulation:
         Returns:
             tuple: (height_data, displacement_data, normal_data) as float32 arrays
         """
-        h0_t = self.h0 * np.exp(1j * self.omega * t) + self.h0_conj * np.exp(-1j * self.omega * t)
+        # iWave physics (all CUDA)
+        self.local_height += self.source_term
+        self.local_height *= self.blured_obstruction
+        self.local_height *= wake_strength
         
-        height_data = np.real(np.fft.ifft2(h0_t)) * 10.0
+        h0_t = (self.h0 * torch.exp(1j * self.omega_vals * t) +
+                self.h0_conj * torch.exp(-1j * self.omega_vals * t))
+        ambient_torch = torch.fft.ifft2(h0_t).real.unsqueeze(0).unsqueeze(0)
         
-        kx_norm = np.where(self.mask, self.uu / self.u_nag, 0) * CHOPPY_FACTOR
-        kz_norm = np.where(self.mask, self.vv / self.u_nag, 0) * CHOPPY_FACTOR
+        self.local_height -= ambient_torch * (1.0 - self.obstruction)
         
-        dx_disp = -1j * kx_norm * h0_t
-        dx_data = np.real(np.fft.ifft2(dx_disp))
-        dz_disp = -1j * kz_norm * h0_t
-        dz_data = np.real(np.fft.ifft2(dz_disp))
-        disp_data = np.stack([dx_data, dz_data], axis=-1)
+        new_h = (self.local_height * self.C1) - (self.prev_height * self.C2) - \
+                (self.C3 * F.conv2d(F.pad(self.local_height, (6, 6, 6, 6), mode='circular'), 
+                                    self.kernel_tensor))
+        self.prev_height, self.local_height = self.local_height, new_h
+        
+        combined = (ambient_torch + self.local_height) * self.obstruction
+        h_field = combined.squeeze()
+        
+        # Height data
+        height_data = (h_field * 10.0).cpu().numpy().astype('f4')
+        
+        # Displacement data
+        disp_fft = torch.stack([-1j * self.k_hat_x * h0_t,
+                                -1j * self.k_hat_z * h0_t], dim=0)
+        disp = torch.fft.ifft2(disp_fft).real * LAMBDA_CHOP
+        dx_tensor = torch.stack([disp[0], disp[1]], dim=-1)
+        disp_data = dx_tensor.cpu().numpy().astype('f4')
         
         h_dx = np.roll(height_data, -1, axis=1) - np.roll(height_data, 1, axis=1)
         h_dz = np.roll(height_data, -1, axis=0) - np.roll(height_data, 1, axis=0)
         texel_world = 2.0 * L / GRID_SIZE
         h_dx /= texel_world
         h_dz /= texel_world
-        normal_data = np.stack([h_dx, h_dz], axis=-1)
-        return height_data.astype('f4'), disp_data.astype('f4'), normal_data.astype('f4')
+        normal_data = np.stack([h_dx, h_dz], axis=-1).astype('f4')
+        
+        return height_data, disp_data, normal_data
