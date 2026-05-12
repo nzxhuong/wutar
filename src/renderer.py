@@ -15,10 +15,13 @@ class WaveRenderer:
                                        fragment_shader=self.obj_fragment_shader)
         self.prog_screen = self.ctx.program(vertex_shader=self.screen_vertex_shader,
                                           fragment_shader=self.screen_fragment_shader)
+        self.prog_dot = self.ctx.program(vertex_shader=self.dot_vertex_shader,
+                                        fragment_shader=self.dot_fragment_shader)
         
         self._setup_geometry()
         self._setup_object_geometry()
         self._setup_screen_quad()
+        self._setup_hand_dot()
         self._setup_textures()
         self._setup_lighting()
     
@@ -37,6 +40,10 @@ class WaveRenderer:
                 self.screen_vertex_shader = f.read()
             with open('shaders/screen_fragment.glsl', 'r') as f:
                 self.screen_fragment_shader = f.read()
+            with open('shaders/dot_vertex.glsl', 'r') as f:
+                self.dot_vertex_shader = f.read()
+            with open('shaders/dot_fragment.glsl', 'r') as f:
+                self.dot_fragment_shader = f.read()
         except FileNotFoundError as e:
             print(f"Error loading shaders: {e}")
             raise e
@@ -92,6 +99,13 @@ class WaveRenderer:
         self.screen_vao = self.ctx.vertex_array(self.prog_screen, 
                                                 [(self.screen_vbo, '2f', 'in_pos')])
     
+    def _setup_hand_dot(self):
+        """Setup hand dot overlay VAO."""
+        dot_data = np.zeros((1, 2), dtype='f4')
+        self.dot_vbo = self.ctx.buffer(dot_data)
+        self.dot_vao = self.ctx.vertex_array(self.prog_dot, 
+                                             [(self.dot_vbo, '2f', 'in_pos')])
+    
     def _setup_textures(self):
         self.height_tex = self.ctx.texture((GRID_SIZE, GRID_SIZE), 1, dtype='f4')
         self.height_tex_dx = self.ctx.texture((GRID_SIZE, GRID_SIZE), 2, dtype='f4')
@@ -105,13 +119,14 @@ class WaveRenderer:
     def _setup_lighting(self):
         light_vec = np.array(light_vector, dtype='f4')
         light_vec /= np.linalg.norm(light_vec)
+        self.light_vector = light_vec  # Store as instance attribute
         self.prog['light_vector'].write(light_vec)
         self.prog_obj['light_vector'].write(light_vec)
     
-    def draw_ocean(self, height_data, displacement_data, model_matrix, view_matrix, proj_matrix, cam_pos):
-        """Draw the ocean surface."""
-        self.height_tex.write(height_data.tobytes())
-        self.height_tex_dx.write(displacement_data.tobytes())
+    def draw_ocean(self, height_tensor, displacement_tensor, model_matrix, view_matrix, proj_matrix, cam_pos):
+        """Draw ocean surface with zero-copy GPU tensor upload."""
+        self.height_tex.write(height_tensor.cpu().numpy().tobytes())
+        self.height_tex_dx.write(displacement_tensor.cpu().numpy().tobytes())
         
         self.fbo.use()
         self.ctx.clear(0.05, 0.08, 0.15)
@@ -127,6 +142,7 @@ class WaveRenderer:
         self.prog['view'].write(view_matrix)
         self.prog['proj'].write(proj_matrix)
         self.prog['cam_pos'].write(cam_pos)
+        self.prog['light_vector'].write(self.light_vector)
         
         self.vao.render(moderngl.TRIANGLES)
     
@@ -136,6 +152,25 @@ class WaveRenderer:
         self.prog_obj['view'].write(view_matrix)
         self.prog_obj['proj'].write(proj_matrix)
         self.obj_vao.render(moderngl.TRIANGLES)
+    
+    def draw_hand_dot(self, tip_ndc, confirmed):
+        """Draw hand overlay dot."""
+        if tip_ndc is not None:
+            dot_data = np.array([[tip_ndc[0], tip_ndc[1]]], dtype='f4')
+            self.dot_vbo.write(dot_data.tobytes())
+            
+            self.ctx.disable(moderngl.DEPTH_TEST)
+            self.ctx.enable(moderngl.BLEND)
+            self.ctx.blend_func = moderngl.SRC_ALPHA, moderngl.ONE_MINUS_SRC_ALPHA
+            self.ctx.enable(moderngl.PROGRAM_POINT_SIZE)
+            
+            if confirmed:
+                self.prog_dot['u_color'].value = (0.1, 0.9, 0.2)
+            else:
+                self.prog_dot['u_color'].value = (1.0, 0.2, 0.2)
+            
+            self.dot_vao.render(moderngl.POINTS, vertices=1)
+            self.ctx.disable(moderngl.BLEND)
     
     def blit_to_screen(self):
         """Blit FBO to screen (zero-copy)."""
@@ -156,8 +191,11 @@ class WaveRenderer:
         self.obj_vao.release()
         self.screen_vbo.release()
         self.screen_vao.release()
+        self.dot_vbo.release()
+        self.dot_vao.release()
         self.height_tex.release()
         self.fbo.release()
         self.prog.release()
         self.prog_obj.release()
         self.prog_screen.release()
+        self.prog_dot.release()

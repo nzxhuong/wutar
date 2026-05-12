@@ -1,6 +1,6 @@
 import torch
 
-GRID_SIZE = 256
+GRID_SIZE = 1024
 W, H = 1280, 720
 
 L = 500.0 
@@ -12,16 +12,14 @@ WIND_SPEED = 50.0
 
 wind_dir = [60.0, 30.0]
 
-# iWave physics constants
 DT = 0.025
 ALPHA = 0.1
 LAMBDA_CHOP = 1.5
 
-# Obstruction constants
 OBS_RADIUS = 10.0
-wake_strength = 0.9
+wake_strength = 0.99
 
-cam_pos_initial = [0.0, 150.0, -250.0]
+cam_pos_initial = [0.0, 50.0, -250.0]
 cam_yaw_initial = 1.56
 cam_pitch_initial = -0.4
 

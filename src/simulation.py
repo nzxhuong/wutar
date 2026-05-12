@@ -4,6 +4,24 @@ import torch.nn.functional as F
 from config import *
 
 class WaveSimulation:
+    def _get_ker_weight_torch(self, P=6, sigma=1.0):
+        k = torch.arange(-P, P + 1, dtype=torch.float32, device=device)
+        K, L_mesh = torch.meshgrid(k, k, indexing='ij')
+        r = torch.sqrt(K**2 + L_mesh**2)
+        q = torch.arange(1, 10001, dtype=torch.float32, device=device) * 0.001
+        q3d, r3d = q[:, None, None], r[None, :, :]
+        G_val = (q3d**2 * torch.exp(-sigma * q3d**2)
+                 * torch.special.bessel_j0(q3d * r3d)).sum(dim=0)
+        G_val /= G_val[P, P].clone()
+        return G_val.view(1, 1, 2*P+1, 2*P+1)
+    
+    def _gaussian_kernel_2d(self, size, sigma):
+        k = size // 2
+        x = torch.arange(-k, k+1).float().to(device)
+        g = torch.exp(-x**2 / (2*sigma**2))
+        g /= g.sum()
+        return (g[:, None] * g[None, :]).view(1, 1, size, size)
+    
     def __init__(self):
         """Initialize wave simulation with spectrum calculation on GPU."""
         u_coords = (torch.fft.fftfreq(GRID_SIZE, d=1.0/GRID_SIZE, device=device)
@@ -66,56 +84,56 @@ class WaveSimulation:
         self.obstruction_dirty = True
         self.blured_obstruction = None
         self.source_term = None
-    
-    def _get_ker_weight_torch(self, P=6, sigma=1.0):
-        k = torch.arange(-P, P + 1, dtype=torch.float32, device=device)
-        K, L_mesh = torch.meshgrid(k, k, indexing='ij')
-        r = torch.sqrt(K**2 + L_mesh**2)
-        q = torch.arange(1, 10001, dtype=torch.float32, device=device) * 0.001
-        q3d, r3d = q[:, None, None], r[None, :, :]
-        G_val = (q3d**2 * torch.exp(-sigma * q3d**2)
-                 * torch.special.bessel_j0(q3d * r3d)).sum(dim=0)
-        G_val /= G_val[P, P].clone()
-        return G_val.view(1, 1, 2*P+1, 2*P+1)
-    
-    def _gaussian_kernel_2d(self, size, sigma):
-        k = size // 2
-        x = torch.arange(-k, k+1).float().to(device)
-        g = torch.exp(-x**2 / (2*sigma**2))
-        g /= g.sum()
-        return (g[:, None] * g[None, :]).view(1, 1, size, size)
-    
-    def update_obstruction(self, mouse_target=None):
-        """Update obstruction position based on mouse target."""
-        pos_changed = False
         
-        if mouse_target is not None:
-            target = torch.tensor(mouse_target, dtype=torch.float32, device=device)
+        # Boat rotation
+        self.boat_yaw = 0.0
+    
+    def update_obstruction(self, active_target=None):
+        """Update obstruction position with enhanced boat physics and rotation."""
+        pos_changed = False
+        cos_y = np.cos(self.boat_yaw)
+        sin_y = np.sin(self.boat_yaw)
+
+        if active_target is not None:
+            target = torch.tensor(active_target, dtype=torch.float32, device=device)
             diff = target - self.obs_pos
             if torch.linalg.norm(diff) > 0.1:
-                self.obs_pos += diff * 0.35
+                tar_yaw = torch.atan2(diff[1], diff[0])
+                yaw_diff = tar_yaw - self.boat_yaw
+                yaw_diff = (yaw_diff + np.pi) % (2 * np.pi) - np.pi
+                self.boat_yaw += yaw_diff.item() * 10.0 * DT
+                
+                self.obs_pos += diff * DT
                 self.obs_vel = diff / DT
+                
+                vel_magnitude = torch.linalg.norm(self.obs_vel)
+                if vel_magnitude > 150.0:
+                    self.obs_vel = self.obs_vel * (150.0 / vel_magnitude)
                 pos_changed = True
             else:
                 self.obs_vel = torch.zeros(2, device=device)
         else:
             if torch.linalg.norm(self.obs_vel) > 0.1:
-                self.obs_vel *= 0.85
+                self.obs_vel *= 0.99
                 self.obs_pos += self.obs_vel * DT
                 pos_changed = True
             else:
                 self.obs_vel = torch.zeros(2, device=device)
-        
+
         if pos_changed:
             self.obstruction.fill_(1.0)
             y_g2 = torch.arange(GRID_SIZE, device=device).float()
             x_g2 = torch.arange(GRID_SIZE, device=device).float()
             yy2, xx2 = torch.meshgrid(y_g2, x_g2, indexing='ij')
-            mask = (torch.abs(xx2 - self.obs_pos[1]) < 10) & \
-                   (torch.abs(yy2 - self.obs_pos[0]) < 25)
-            self.obstruction[0, 0, mask] = 0.0
+            
+            dx = xx2 - self.obs_pos[1]
+            dy = yy2 - self.obs_pos[0]
+            dx_rot = dx * cos_y - dy * sin_y
+            dy_rot = dx * sin_y + dy * cos_y
+            mask2 = (torch.abs(dx_rot) < 10) & (torch.abs(dy_rot) < 25)
+            self.obstruction[0, 0, mask2] = 0.0
             self.obstruction_dirty = True
-        
+
         if self.obstruction_dirty:
             self.blured_obstruction = F.conv2d(
                 F.pad(self.obstruction, (self.pad_g, self.pad_g, self.pad_g, self.pad_g), mode='circular'),
@@ -133,14 +151,13 @@ class WaveSimulation:
         Returns:
             tuple: (height_data, displacement_data, normal_data) as float32 arrays
         """
-        # iWave physics (all CUDA)
         self.local_height += self.source_term
         self.local_height *= self.blured_obstruction
         self.local_height *= wake_strength
         
         h0_t = (self.h0 * torch.exp(1j * self.omega_vals * t) +
                 self.h0_conj * torch.exp(-1j * self.omega_vals * t))
-        ambient_torch = torch.fft.ifft2(h0_t).real.unsqueeze(0).unsqueeze(0)
+        ambient_torch = torch.fft.ifft2(h0_t).real.unsqueeze(0).unsqueeze(0) * 10.0
         
         self.local_height -= ambient_torch * (1.0 - self.obstruction)
         
@@ -149,24 +166,14 @@ class WaveSimulation:
                                     self.kernel_tensor))
         self.prev_height, self.local_height = self.local_height, new_h
         
-        combined = (ambient_torch + self.local_height) * self.obstruction
+        combined = (ambient_torch * 10.0 + self.local_height) * self.obstruction
         h_field = combined.squeeze()
         
-        # Height data
-        height_data = (h_field * 10.0).cpu().numpy().astype('f4')
+        h_scaled = h_field.contiguous()
         
-        # Displacement data
         disp_fft = torch.stack([-1j * self.k_hat_x * h0_t,
                                 -1j * self.k_hat_z * h0_t], dim=0)
         disp = torch.fft.ifft2(disp_fft).real * LAMBDA_CHOP
-        dx_tensor = torch.stack([disp[0], disp[1]], dim=-1)
-        disp_data = dx_tensor.cpu().numpy().astype('f4')
+        dx_tensor = torch.stack([disp[0], disp[1]], dim=-1).contiguous()
         
-        h_dx = np.roll(height_data, -1, axis=1) - np.roll(height_data, 1, axis=1)
-        h_dz = np.roll(height_data, -1, axis=0) - np.roll(height_data, 1, axis=0)
-        texel_world = 2.0 * L / GRID_SIZE
-        h_dx /= texel_world
-        h_dz /= texel_world
-        normal_data = np.stack([h_dx, h_dz], axis=-1).astype('f4')
-        
-        return height_data, disp_data, normal_data
+        return h_scaled, dx_tensor

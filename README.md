@@ -1,8 +1,8 @@
 # Ocean Simulation
 ![sim](./assets/wave.gif)
 
-A real-time ocean wave simulation using phillips spectrum and Fast Fourier Transform (FFT) for realistic water rendering.
-
+A real-time ocean wave simulation using phillips spectrum and Fast Fourier Transform (FFT) for ocean rendering.
+Download the hand_landmarker.task file [here](https://developers.google.com/mediapipe/solutions/vision/hand_landmarker#models).
 ## Resources & References
 
 ### Primary Resources
@@ -17,5 +17,5 @@ A real-time ocean wave simulation using phillips spectrum and Fast Fourier Trans
 ### Foam Generation
 
 ### Better Lighting
-- **Environment Mapping**: Skybox reflections for realistic water surface
+- **Environment Mapping**: Skybox reflections for realistic ocean surface
 - **Subsurface Scattering**: Light penetration for shallow water effects
