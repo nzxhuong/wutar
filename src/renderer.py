@@ -17,14 +17,20 @@ class WaveRenderer:
                                           fragment_shader=self.screen_fragment_shader)
         self.prog_dot = self.ctx.program(vertex_shader=self.dot_vertex_shader,
                                         fragment_shader=self.dot_fragment_shader)
+        self.prog_sky = self.ctx.program(vertex_shader=self.sky_vertex_shader,
+                                        fragment_shader=self.sky_fragment_shader)
+        
+        self._setup_sky()
+        self._setup_lighting()
+        self._gen_cubemap()
         
         self._setup_geometry()
         self._setup_object_geometry()
         self._setup_screen_quad()
         self._setup_hand_dot()
         self._setup_textures()
-        self._setup_lighting()
-    
+       
+
     def _load_shaders(self):
         """Load vertex and fragment shaders from files."""
         try:
@@ -44,6 +50,10 @@ class WaveRenderer:
                 self.dot_vertex_shader = f.read()
             with open('shaders/dot_fragment.glsl', 'r') as f:
                 self.dot_fragment_shader = f.read()
+            with open('shaders/sky_fragment.glsl', 'r') as f:
+                self.sky_fragment_shader = f.read()
+            with open('shaders/sky_vertex.glsl', 'r') as f:
+                self.sky_vertex_shader = f.read()
         except FileNotFoundError as e:
             print(f"Error loading shaders: {e}")
             raise e
@@ -91,7 +101,27 @@ class WaveRenderer:
         self.obj_vao = self.ctx.vertex_array(self.prog_obj, 
                                              [(self.obj_vbo, '3f 3f', 'in_vert', 'in_norm')], 
                                              index_buffer=self.obj_ibo)
-    
+    def _setup_sky(self):
+        """Setup sky geometry (sphere)."""
+        obj_verts = np.array([
+            -1,-1, 1,   1,-1, 1,   1, 1, 1,  -1, 1, 1,
+            -1,-1,-1, -1, 1,-1,   1, 1,-1,   1,-1,-1,
+            -1, 1,-1,  -1, 1, 1,   1, 1, 1,   1, 1,-1,
+            -1,-1,-1,   1,-1,-1,   1,-1, 1,  -1,-1, 1,
+            -1,-1,-1,  -1, 1,-1,  -1, 1, 1,  -1,-1, 1,
+             1,-1,-1,   1, 1,-1,   1, 1, 1,   1,-1, 1,
+        ], dtype='f4')
+        
+        obj_indices = np.array([
+            0,1,2, 0,2,3, 4,5,6, 4,6,7, 8,9,10, 8,10,11, 
+            12,13,14, 12,14,15, 16,17,18, 16,18,19, 20,21,22, 20,22,23
+        ], dtype='i4')
+        
+        self.sky_vbo = self.ctx.buffer(obj_verts)
+        self.sky_ibo = self.ctx.buffer(obj_indices)
+        self.sky_vao = self.ctx.vertex_array(self.prog_sky, 
+                                             [(self.sky_vbo, '3f', 'in_pos')], 
+                                             index_buffer=self.sky_ibo)
     def _setup_screen_quad(self):
         """Setup full-screen quad for FBO blit."""
         screen_quad = np.array([-1, -1, 1, -1, -1, 1, 1, 1], dtype='f4')
@@ -119,22 +149,66 @@ class WaveRenderer:
     def _setup_lighting(self):
         light_vec = np.array(light_vector, dtype='f4')
         light_vec /= np.linalg.norm(light_vec)
-        self.light_vector = light_vec  # Store as instance attribute
-        self.prog['light_vector'].write(light_vec)
-        self.prog_obj['light_vector'].write(light_vec)
-    
+        self.light_vector = light_vec 
+        if 'light_vector' in self.prog:
+            self.prog['light_vector'].write(light_vec)
+        if 'light_vector' in self.prog_obj:
+            self.prog_obj['light_vector'].write(light_vec)
+
+    def _gen_cubemap(self, size=1024):
+        """Generates a procedural Tropical Paradise gradient cubemap."""
+        color_bottom = np.array([0.1, 0.5, 0.9], dtype='f4') 
+        color_top = np.array([0.6, 0.8, 1.0], dtype='f4')
+        
+        self.skybox_tex = self.ctx.texture_cube((size, size), 3, dtype='f4')
+
+        for i in range(6):
+            y = np.linspace(0, 1, size, dtype='f4').reshape(size, 1, 1)
+            
+            if i == 2: 
+                face_data = np.full((size, size, 3), color_top, dtype='f4')
+            elif i == 3:
+                face_data = np.full((size, size, 3), color_bottom, dtype='f4')
+            else:
+                face_data = (1.0 - y) * color_bottom + y * color_top
+                face_data = np.tile(face_data, (1, size, 1))
+
+            self.skybox_tex.write(face=i, data=face_data.tobytes())
+
+        self.skybox_tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
+    def draw_sky(self, view_matrix, proj_matrix):
+        self.fbo.use()
+        self.ctx.clear(0.05, 0.08, 0.15)
+        self.ctx.disable(moderngl.DEPTH_TEST)
+        
+        sky_view = view_matrix.copy()
+        sky_view[3, 0:3] = 0.0 
+        
+        self.ctx.disable(moderngl.CULL_FACE)   
+        
+        self.skybox_tex.use(location=0)
+        self.prog_sky['skybox'].value = 0
+        
+        self.prog_sky['view'].write(sky_view)
+        self.prog_sky['proj'].write(proj_matrix)
+        self.sky_vao.render(moderngl.TRIANGLES)
+        
+        self.ctx.enable(moderngl.CULL_FACE)
+        self.ctx.enable(moderngl.DEPTH_TEST)
+
+
     def draw_ocean(self, height_tensor, displacement_tensor, model_matrix, view_matrix, proj_matrix, cam_pos):
         """Draw ocean surface with zero-copy GPU tensor upload."""
         self.height_tex.write(height_tensor.cpu().numpy().tobytes())
         self.height_tex_dx.write(displacement_tensor.cpu().numpy().tobytes())
         
-        self.fbo.use()
-        self.ctx.clear(0.05, 0.08, 0.15)
+        self.ctx.disable(moderngl.CULL_FACE)
         self.ctx.enable(moderngl.DEPTH_TEST)
         
         self.height_tex.use(location=0)
         self.height_tex_dx.use(location=1)
-        
+        self.skybox_tex.use(location=2)
+        self.prog['skybox'].value = 2
         self.prog['height_map'].value = 0
         self.prog['height_map_dx'].value = 1
         self.prog['WORLD_L'].value = L
@@ -145,6 +219,7 @@ class WaveRenderer:
         self.prog['light_vector'].write(self.light_vector)
         
         self.vao.render(moderngl.TRIANGLES)
+        self.ctx.enable(moderngl.CULL_FACE)
     
     def draw_object(self, obj_model, view_matrix, proj_matrix):
         """Draw the boat/obstruction object."""
@@ -171,9 +246,8 @@ class WaveRenderer:
             
             self.dot_vao.render(moderngl.POINTS, vertices=1)
             self.ctx.disable(moderngl.BLEND)
-    
     def blit_to_screen(self):
-        """Blit FBO to screen (zero-copy)."""
+        """Blit FBO to screen."""
         self.ctx.screen.use()
         self.ctx.clear(0.05, 0.08, 0.15)
         

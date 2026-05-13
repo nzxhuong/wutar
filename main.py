@@ -59,7 +59,7 @@ def main():
             model = np.eye(4, dtype='f4')
             view = camera.get_view_matrix()
             proj = Camera.perspective(np.radians(fov_degrees), W/H, near_plane, far_plane)
-            
+            renderer.draw_sky(view, proj)
             renderer.draw_ocean(height_tensor, displacement_tensor, model, view, proj, camera.pos)
             
             obs_pos_cpu = simulation.obs_pos.cpu().numpy()
