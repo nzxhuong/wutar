@@ -53,7 +53,7 @@ class WaveSimulation:
         
         xi_r1 = torch.randn(GRID_SIZE, GRID_SIZE, device=device)
         xi_i1 = torch.randn(GRID_SIZE, GRID_SIZE, device=device)
-        h0 = (1 / np.sqrt(2)) * (xi_r1 + 1j * xi_i1) * torch.sqrt(p_spectrum)
+        h0 = (1 / np.sqrt(2)) * (xi_r1 + 1j * xi_i1) * torch.sqrt(p_spectrum) * (2.0 * torch.pi / L)
         self.h0 = h0
         self.h0_conj = torch.conj(h0)
         
@@ -157,7 +157,7 @@ class WaveSimulation:
         
         h0_t = (self.h0 * torch.exp(1j * self.omega_vals * t) +
                 self.h0_conj * torch.exp(-1j * self.omega_vals * t))
-        ambient_torch = torch.fft.ifft2(h0_t).real.unsqueeze(0).unsqueeze(0) * 10.0
+        ambient_torch = torch.fft.ifft2(h0_t, norm="forward").real.unsqueeze(0).unsqueeze(0) * DISP_SCALE
         
         self.local_height -= ambient_torch * (1.0 - self.obstruction)
         
@@ -166,14 +166,14 @@ class WaveSimulation:
                                     self.kernel_tensor))
         self.prev_height, self.local_height = self.local_height, new_h
         
-        combined = (ambient_torch * 10.0 + self.local_height) * self.obstruction
+        combined = (ambient_torch * 2.5 + self.local_height) * self.obstruction
         h_field = combined.squeeze()
         
         h_scaled = h_field.contiguous()
         
         disp_fft = torch.stack([-1j * self.k_hat_x * h0_t,
                                 -1j * self.k_hat_z * h0_t], dim=0)
-        disp = torch.fft.ifft2(disp_fft).real * LAMBDA_CHOP
+        disp = torch.fft.ifft2(disp_fft).real * LAMBDA_CHOP * DISP_SCALE
         dx_tensor = torch.stack([disp[0], disp[1]], dim=-1).contiguous()
         
         return h_scaled, dx_tensor
