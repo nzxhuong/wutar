@@ -5,17 +5,17 @@ W, H = 1280, 720
 
 L = 500.0 
 G = 9.81    
-A = 1e-5    
+A = 5e-4    
 t = 0.0  
 CHOPPY_FACTOR = 1.5   
-WIND_SPEED = 50.0
+WIND_SPEED = 30.0
 
 wind_dir = [60.0, 30.0]
 
 DT = 0.025
 ALPHA = 0.1
-LAMBDA_CHOP = 1.5
-DISP_SCALE = 2.0
+LAMBDA_CHOP = 1.2
+DISP_SCALE = 2.5
 
 OBS_RADIUS = 10.0
 wake_strength = 0.99
