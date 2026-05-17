@@ -53,7 +53,7 @@ class WaveSimulation:
         
         xi_r1 = torch.randn(GRID_SIZE, GRID_SIZE, device=device)
         xi_i1 = torch.randn(GRID_SIZE, GRID_SIZE, device=device)
-        h0 = (1 / np.sqrt(2)) * (xi_r1 + 1j * xi_i1) * torch.sqrt(p_spectrum) * (2.0 * torch.pi / L)
+        h0 = (1 / np.sqrt(2)) * (xi_r1 + 1j * xi_i1) * torch.sqrt(p_spectrum) #* (2.0 * torch.pi / L)
         self.h0 = h0
         self.h0_conj = torch.conj(h0)
         

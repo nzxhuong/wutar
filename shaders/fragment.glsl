@@ -18,16 +18,19 @@ void main() {
     vec3 N = normalize(vec3(-grad.x, 1.0, -grad.y));
     vec3 V = normalize(cam_pos - v_pos);
     vec3 H = normalize(light_vector + V);
-    float spec = pow(max(dot(N,H),0.0), 128.0);
-    vec3 base_color = vec3(0.0, 0.2, 0.4);
-    float diffuse = pow(max(dot(N,light_vector),0.0), 2.0);
-    float F0 = 0.02;
-    float fresnel = F0 + (1.0-F0)*pow(1.0-max(dot(N,V),0.0),5.0);
-    vec3 reflection_color = texture(skybox, reflect(-V, N)).rgb;
-    fresnel = clamp(fresnel,0.0,1.0);
-    // vec3 color = base_color*(1.0-fresnel) + vec3(0.8,0.9,1.0)*fresnel;
-    // 
-    vec3 final_color = mix(base_color, reflection_color, fresnel);
-    final_color += spec * vec3(1.0, 1.0, 1.0) * 0.6;
+    float spec = pow(max(dot(N,H),0.0), 50.0);
+    vec3 light_color = vec3(1.0, 1.0, 1.0);
+    vec3 ambient_color = vec3(0.05, 0.13, 0.19);
+    vec3 bubble_color = vec3(0.347, 0.513, 0.688);
+    float fresnel = pow(1.0-max(dot(N,V),0.0),5.0);
+    vec3 water_scatter_color = vec3(0.558, 0.754, 0.718);
+    vec3 ambient = -0.1 * ambient_color  * light_color + 0.45 * bubble_color * light_color;
+    float height = texture(height_map, v_uv).r;
+    float water_scatter_1 = 0.51 * max(0.0, height) * pow(max(0.0, dot(light_vector, -V)), 4.0) * pow(max(0.0, 0.5 - 0.5 * dot(N, light_vector)), 3.0);
+    float dotNV = dot(N, V);
+    float water_scatter_2 = -0.10 * (dotNV * dotNV);
+    vec3 water_scatter = water_scatter_color * light_color * (1.0 - fresnel) * (water_scatter_1 + water_scatter_2);
+    vec3 reflection_color = texture(skybox, reflect(-V, N)).rgb * fresnel * 0.41;
+    vec3 final_color = ambient + water_scatter + reflection_color + spec * vec3(3.688, 2.656, 1.931) * fresnel;
     f_color = vec4(final_color, 1.0);
 }

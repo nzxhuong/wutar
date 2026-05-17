@@ -28,7 +28,6 @@ You can modify the visual style of the simulation by editing the following param
 *Note: Colors are defined as RGB values normalized between `0.0` and `1.0`.*
 
 ## TODO
-- [x] Style ocean
+- [X] Atlas from temu lighting
 - [ ] Add foam
-- [ ] Physics-based rendering
 - [ ] Actual buoyancy
