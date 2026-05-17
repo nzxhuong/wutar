@@ -29,5 +29,5 @@ You can modify the visual style of the simulation by editing the following param
 
 ## TODO
 - [X] Atlas from temu lighting
-- [ ] Add foam
+- [X] Add foam
 - [ ] Actual buoyancy

@@ -59,25 +59,27 @@ class WaveRenderer:
             raise e
     
     def _setup_geometry(self):
-        x = np.linspace(-L/2, L/2, GRID_SIZE)
-        y = np.linspace(-L/2, L/2, GRID_SIZE)
+        x = np.linspace(-L/2, L/2, MESH_SIZE, dtype='f4')
+        y = np.linspace(-L/2, L/2, MESH_SIZE, dtype='f4')
         xx, yy = np.meshgrid(x, y)
-        vertices = np.stack([xx.ravel(), yy.ravel()], axis=-1).astype('f4')
-        
+        vertices = np.stack([xx.ravel(), yy.ravel()], axis=-1)
         self.vbo = self.ctx.buffer(vertices)
         
-        indices = []
-        for r in range(GRID_SIZE - 1):
-            for c in range(GRID_SIZE - 1):
-                i0 = r * GRID_SIZE + c
-                i1 = i0 + 1
-                i2 = i0 + GRID_SIZE
-                i3 = i2 + 1
-                indices.extend([i0, i1, i2, i1, i3, i2])
+        # Fast numpy index generation, no Python loop
+        r = np.arange(MESH_SIZE - 1, dtype='i4')
+        c = np.arange(MESH_SIZE - 1, dtype='i4')
+        rr, cc = np.meshgrid(r, c, indexing='ij')
+        rr = rr.ravel()
+        cc = cc.ravel()
         
-        self.ibo = self.ctx.buffer(np.array(indices, dtype='i4'))
+        i0 = rr * MESH_SIZE + cc
+        i1 = i0 + 1
+        i2 = i0 + MESH_SIZE
+        i3 = i2 + 1
         
-        self.vao = self.ctx.vertex_array(self.prog, [(self.vbo, '2f', 'in_pos')], 
+        indices = np.stack([i0, i1, i2, i1, i3, i2], axis=-1).ravel()
+        self.ibo = self.ctx.buffer(indices)
+        self.vao = self.ctx.vertex_array(self.prog, [(self.vbo, '2f', 'in_pos')],
                                         index_buffer=self.ibo)
     
     def _setup_object_geometry(self):
@@ -139,7 +141,8 @@ class WaveRenderer:
     def _setup_textures(self):
         self.height_tex = self.ctx.texture((GRID_SIZE, GRID_SIZE), 1, dtype='f4')
         self.height_tex_dx = self.ctx.texture((GRID_SIZE, GRID_SIZE), 2, dtype='f4')
-        
+        self.foam_tex = self.ctx.texture((GRID_SIZE, GRID_SIZE), 1, dtype='f4')
+
         self.fbo = self.ctx.framebuffer(
             color_attachments=[self.ctx.texture((W, H), 4)], 
             depth_attachment=self.ctx.depth_renderbuffer((W, H))
@@ -197,20 +200,23 @@ class WaveRenderer:
         self.ctx.enable(moderngl.DEPTH_TEST)
 
 
-    def draw_ocean(self, height_tensor, displacement_tensor, model_matrix, view_matrix, proj_matrix, cam_pos):
+    def draw_ocean(self, height_tensor, displacement_tensor, foam_tensor, model_matrix, view_matrix, proj_matrix, cam_pos):
         """Draw ocean surface with zero-copy GPU tensor upload."""
         self.height_tex.write(height_tensor.cpu().numpy().tobytes())
         self.height_tex_dx.write(displacement_tensor.cpu().numpy().tobytes())
-        
+        self.foam_tex.write(foam_tensor.cpu().numpy().tobytes())
+
         self.ctx.disable(moderngl.CULL_FACE)
         self.ctx.enable(moderngl.DEPTH_TEST)
         
         self.height_tex.use(location=0)
         self.height_tex_dx.use(location=1)
         self.skybox_tex.use(location=2)
+        self.foam_tex.use(location=3)
         self.prog['skybox'].value = 2
         self.prog['height_map'].value = 0
         self.prog['height_map_dx'].value = 1
+        self.prog['foam_map'].value = 3
         self.prog['WORLD_L'].value = L
         self.prog['model'].write(model_matrix)
         self.prog['view'].write(view_matrix)

@@ -4,6 +4,83 @@ import torch.nn.functional as F
 from config import *
 
 class WaveSimulation:
+    def _dispersion(self, k_mag):
+        """Deep water dispersion relation."""
+        return torch.sqrt(G * k_mag)
+
+    def _dispersion_peak(self):
+        """JONSWAP peak angular frequency."""
+        return 22.0 * (G**2 / (self.WIND_SPEED * self.FETCH)) ** 0.33
+
+    def _tma_correction(self, omega):
+        """Shallow water TMA correction factor."""
+        omega_h = omega * torch.sqrt(torch.tensor(self.DEPTH / G, device=device))
+        correction = torch.where(
+            omega_h <= 1.0,
+            0.5 * omega_h**2,
+            torch.where(
+                omega_h < 2.0,
+                1.0 - 0.5 * (2.0 - omega_h)**2,
+                torch.ones_like(omega_h)
+            )
+        )
+        return correction
+
+    def _jonswap(self, omega, omega_p):
+        """JONSWAP frequency spectrum."""
+        alpha = 0.076 * (self.WIND_SPEED**2 / (self.FETCH * G))**0.22
+        gamma = 3.3
+
+        sigma = torch.where(omega <= omega_p,
+                            torch.full_like(omega, 0.07),
+                            torch.full_like(omega, 0.09))
+
+        r = torch.exp(-(omega - omega_p)**2 / (2 * sigma**2 * omega_p**2))
+
+        first  = alpha * G**2 / (omega**5)
+        second = torch.exp(-1.25 * (omega_p / omega)**4)
+        third  = gamma ** r
+
+        return self._tma_correction(omega) * first * second * third
+
+    def _base_spread(self, omega, angle, omega_p):
+        """Mitsuyasu directional spreading."""
+        ratio = omega / omega_p
+        beta = torch.where(
+            ratio < 0.95,
+            2.61 * ratio**1.3,
+            torch.where(
+                ratio <= 1.6,
+                2.28 * ratio**(-1.3),
+                10.0 ** (-0.4 + 0.8393 * torch.exp(-0.567 * torch.log(ratio**2)))
+            )
+        )
+        sech = 1.0 / torch.cosh(beta * angle)
+        return beta / (2.0 * torch.tanh(torch.tensor(torch.pi, device=device) * beta)) * sech**2
+
+    def _swell_spread(self, omega, angle, omega_p):
+        """Long-period swell directional component."""
+        s = 16.0 * torch.tanh(omega_p / omega) * self.SWELL**2
+        # normalization: 2^(2s-1)/pi * (Gamma(s+1))^2 / Gamma(2s+1)
+        # approximate with a simpler form for GPU
+        norm = (2.0**(2*s - 1)) / torch.pi * torch.exp(
+            2 * torch.lgamma(s + 1) - torch.lgamma(2*s + 1)
+        )
+        return norm * torch.abs(torch.cos(angle / 2))**(2 * s)
+
+    def _jonswap_spectrum(self, k_mag, omega, angle, omega_p):
+        """Full directional JONSWAP spectrum S(k)."""
+        # dω/dk for change of variables from S(ω) to S(k)
+        domega_dk = G / (2.0 * torch.sqrt(G * k_mag))
+
+        base   = self._base_spread(omega, angle, omega_p)
+        swell  = self._swell_spread(omega, angle, omega_p)
+
+        # Normalize directional spread (approximate integral over -π to π)
+        # Unity does this with a loop; we scale by a constant factor
+        directional = base * swell
+
+        return self._jonswap(omega, omega_p) * directional * domega_dk / k_mag
     def _get_ker_weight_torch(self, P=6, sigma=1.0):
         k = torch.arange(-P, P + 1, dtype=torch.float32, device=device)
         K, L_mesh = torch.meshgrid(k, k, indexing='ij')
@@ -24,39 +101,55 @@ class WaveSimulation:
     
     def __init__(self):
         """Initialize wave simulation with spectrum calculation on GPU."""
+        self.WIND_SPEED = WIND_SPEED
+        self.FETCH = FETCH
+        self.DEPTH = DEPTH
+        self.SWELL = SWELL
+
         u_coords = (torch.fft.fftfreq(GRID_SIZE, d=1.0/GRID_SIZE, device=device)
                     * (2 * torch.pi / L))
         uu, vv = torch.meshgrid(u_coords, u_coords, indexing='ij')
         self.uu = uu
         self.vv = vv
-        u_nag = torch.sqrt(uu**2 + vv**2)
-        self.mask = u_nag > 0
-        
+        k_mag = torch.sqrt(uu**2 + vv**2)
+        self.mask = k_mag > 0
+
+        omega = self._dispersion(torch.where(self.mask, k_mag, torch.ones_like(k_mag)))
+        omega_p = self._dispersion_peak()
+
+        wind_angle_rad = torch.tensor(WIND_ANGLE * torch.pi / 180.0, device=device)
+        k_angle = torch.atan2(vv, uu)
+        rel_angle = k_angle - wind_angle_rad
+        rel_angle = (rel_angle + torch.pi) % (2 * torch.pi) - torch.pi
+
+        self.k_hat_x = torch.where(self.mask, uu / k_mag, torch.zeros_like(uu))
+        self.k_hat_z = torch.where(self.mask, vv / k_mag, torch.zeros_like(vv))
+
         p_spectrum = torch.zeros((GRID_SIZE, GRID_SIZE), device=device)
-        k_hat_x = torch.where(self.mask, uu / u_nag, torch.zeros_like(uu))
-        k_hat_z = torch.where(self.mask, vv / u_nag, torch.zeros_like(vv))
-        self.k_hat_x = k_hat_x
-        self.k_hat_z = k_hat_z
-        
-        wind_dir_tensor = torch.tensor(wind_dir, dtype=torch.float32, device=device)
-        wind_dir_tensor /= torch.linalg.norm(wind_dir_tensor)
-        dot_product = k_hat_x * wind_dir_tensor[0] + k_hat_z * wind_dir_tensor[1]
-        
-        L_val = (WIND_SPEED**2) / G
-        p_spectrum[self.mask] = (
-            A * torch.exp(-1.0 / (u_nag[self.mask] * L_val)**2)
-            / (u_nag[self.mask]**4)
-        ) * (dot_product[self.mask]**2)
-        
-        omega_vals = torch.sqrt(G * u_nag)
-        self.omega_vals = omega_vals
-        
-        xi_r1 = torch.randn(GRID_SIZE, GRID_SIZE, device=device)
-        xi_i1 = torch.randn(GRID_SIZE, GRID_SIZE, device=device)
-        h0 = (1 / np.sqrt(2)) * (xi_r1 + 1j * xi_i1) * torch.sqrt(p_spectrum) #* (2.0 * torch.pi / L)
+        safe_k = torch.where(self.mask, k_mag, torch.ones_like(k_mag))
+        safe_omega = torch.where(self.mask, omega, torch.ones_like(omega))
+
+        p_spectrum[self.mask] = self._jonswap_spectrum(
+            safe_k, safe_omega, rel_angle, omega_p
+        )[self.mask]
+
+        p_spectrum = torch.where(
+            (k_mag > LOW_CUTOFF) & (k_mag < HIGH_CUTOFF),
+            p_spectrum,
+            torch.zeros_like(p_spectrum)
+        )
+
+        delta_k = (2 * torch.pi / L)**2
+        xi_r = torch.randn(GRID_SIZE, GRID_SIZE, device=device)
+        xi_i = torch.randn(GRID_SIZE, GRID_SIZE, device=device)
+        h0 = (1 / torch.sqrt(torch.tensor(2.0, device=device))) \
+            * (xi_r + 1j * xi_i) \
+            * torch.sqrt(torch.clamp(p_spectrum * delta_k * 2, min=0.0))
         self.h0 = h0
         self.h0_conj = torch.conj(h0)
-        
+
+        self.omega_vals = omega
+                
         self.kernel_tensor = self._get_ker_weight_torch(P=6, sigma=1.0)
         
         self.local_height = torch.zeros((1, 1, GRID_SIZE, GRID_SIZE), device=device)
@@ -85,9 +178,10 @@ class WaveSimulation:
         self.blured_obstruction = None
         self.source_term = None
         
-        # Boat rotation
         self.boat_yaw = 0.0
-    
+
+        self.foam = torch.zeros((GRID_SIZE, GRID_SIZE), device=device)
+
     def update_obstruction(self, active_target=None):
         """Update obstruction position with enhanced boat physics and rotation."""
         pos_changed = False
@@ -175,5 +269,18 @@ class WaveSimulation:
                                 -1j * self.k_hat_z * h0_t * LAMBDA_CHOP], dim=0)
         disp = torch.fft.ifft2(disp_fft, norm = 'forward').real * DISP_SCALE
         dx_tensor = torch.stack([disp[0], disp[1]], dim=-1).contiguous()
-        
-        return h_scaled, dx_tensor
+        j_xx_fft = -self.k_hat_x * self.uu * h0_t
+        j_zz_fft = -self.k_hat_z * self.vv * h0_t
+        j_xz_fft = -self.k_hat_x * self.vv * h0_t
+        j_xx = torch.fft.ifft2(j_xx_fft, norm='forward').real
+        j_zz = torch.fft.ifft2(j_zz_fft, norm='forward').real
+        j_xz = torch.fft.ifft2(j_xz_fft, norm='forward').real
+
+        jacobian = (1 + LAMBDA_CHOP * j_xx) * (1 + LAMBDA_CHOP * j_zz) - (LAMBDA_CHOP * j_xz)**2
+        foam_input = -jacobian + FOAM_INTENSITY
+        decay = FOAM_DECAY * DT / torch.clamp(foam_input, 0.5, None)
+        accumulation = self.foam - decay
+        self.foam = torch.clamp(torch.max(accumulation, foam_input), 0.0, 1.0)
+
+        return h_scaled, dx_tensor, self.foam.contiguous()
+
