@@ -59,28 +59,27 @@ class WaveRenderer:
             raise e
     
     def _setup_geometry(self):
-        x = np.linspace(-L/2, L/2, MESH_SIZE, dtype='f4')
-        y = np.linspace(-L/2, L/2, MESH_SIZE, dtype='f4')
+        x = np.linspace(-L/2, L/2, GRID_SIZE)
+        y = np.linspace(-L/2, L/2, GRID_SIZE)
         xx, yy = np.meshgrid(x, y)
-        vertices = np.stack([xx.ravel(), yy.ravel()], axis=-1)
+        vertices = np.stack([xx.ravel(), yy.ravel()], axis=-1).astype('f4')
+        
         self.vbo = self.ctx.buffer(vertices)
         
-        # Fast numpy index generation, no Python loop
-        r = np.arange(MESH_SIZE - 1, dtype='i4')
-        c = np.arange(MESH_SIZE - 1, dtype='i4')
-        rr, cc = np.meshgrid(r, c, indexing='ij')
-        rr = rr.ravel()
-        cc = cc.ravel()
+        indices = []
+        for r in range(GRID_SIZE - 1):
+            for c in range(GRID_SIZE - 1):
+                i0 = r * GRID_SIZE + c
+                i1 = i0 + 1
+                i2 = i0 + GRID_SIZE
+                i3 = i2 + 1
+                indices.extend([i0, i1, i2, i1, i3, i2])
         
-        i0 = rr * MESH_SIZE + cc
-        i1 = i0 + 1
-        i2 = i0 + MESH_SIZE
-        i3 = i2 + 1
+        self.ibo = self.ctx.buffer(np.array(indices, dtype='i4'))
         
-        indices = np.stack([i0, i1, i2, i1, i3, i2], axis=-1).ravel()
-        self.ibo = self.ctx.buffer(indices)
-        self.vao = self.ctx.vertex_array(self.prog, [(self.vbo, '2f', 'in_pos')],
+        self.vao = self.ctx.vertex_array(self.prog, [(self.vbo, '2f', 'in_pos')], 
                                         index_buffer=self.ibo)
+
     
     def _setup_object_geometry(self):
         """Setup boat/obstruction object geometry (cube)."""
