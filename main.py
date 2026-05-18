@@ -69,9 +69,9 @@ def main():
             boat_yaw = simulation.boat_yaw
             
             S = np.eye(4, dtype='f4')
-            S[0,0] = 5.0
-            S[1,1] = 3.0
-            S[2,2] = 12.0
+            S[0,0] = OBJ_WIDTH / 2
+            S[1,1] = 0.5
+            S[2,2] = OBJ_HEIGHT / 2
             
             cos_y = np.cos(boat_yaw)
             sin_y = np.sin(boat_yaw)

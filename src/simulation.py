@@ -61,8 +61,6 @@ class WaveSimulation:
     def _swell_spread(self, omega, angle, omega_p):
         """Long-period swell directional component."""
         s = 16.0 * torch.tanh(omega_p / omega) * self.SWELL**2
-        # normalization: 2^(2s-1)/pi * (Gamma(s+1))^2 / Gamma(2s+1)
-        # approximate with a simpler form for GPU
         norm = (2.0**(2*s - 1)) / torch.pi * torch.exp(
             2 * torch.lgamma(s + 1) - torch.lgamma(2*s + 1)
         )
@@ -70,14 +68,11 @@ class WaveSimulation:
 
     def _jonswap_spectrum(self, k_mag, omega, angle, omega_p):
         """Full directional JONSWAP spectrum S(k)."""
-        # dω/dk for change of variables from S(ω) to S(k)
         domega_dk = G / (2.0 * torch.sqrt(G * k_mag))
 
         base   = self._base_spread(omega, angle, omega_p)
         swell  = self._swell_spread(omega, angle, omega_p)
 
-        # Normalize directional spread (approximate integral over -π to π)
-        # Unity does this with a loop; we scale by a constant factor
         directional = base * swell
 
         return self._jonswap(omega, omega_p) * directional * domega_dk / k_mag
@@ -166,8 +161,8 @@ class WaveSimulation:
         y_g = torch.arange(GRID_SIZE, device=device).float()
         x_g = torch.arange(GRID_SIZE, device=device).float()
         yy0, xx0 = torch.meshgrid(y_g, x_g, indexing='ij')
-        self.obstruction[0, 0, (torch.abs(xx0 - self.obs_pos[0]) < 10) & 
-                              (torch.abs(yy0 - self.obs_pos[1]) < 25)] = 0.0
+        self.obstruction[0, 0, (torch.abs(xx0 - self.obs_pos[0]) < OBJ_WIDTH) & 
+                              (torch.abs(yy0 - self.obs_pos[1]) < OBJ_HEIGHT)] = 0.0
         
         denom = 1.0 + ALPHA * DT
         self.C1 = (2.0 - ALPHA * DT) / denom
@@ -224,7 +219,7 @@ class WaveSimulation:
             dy = yy2 - self.obs_pos[0]
             dx_rot = dx * cos_y - dy * sin_y
             dy_rot = dx * sin_y + dy * cos_y
-            mask2 = (torch.abs(dx_rot) < 10) & (torch.abs(dy_rot) < 25)
+            mask2 = (torch.abs(dx_rot) < OBJ_WIDTH) & (torch.abs(dy_rot) < OBJ_HEIGHT)
             self.obstruction[0, 0, mask2] = 0.0
             self.obstruction_dirty = True
 
@@ -279,8 +274,7 @@ class WaveSimulation:
         jacobian = (1 + LAMBDA_CHOP * j_xx) * (1 + LAMBDA_CHOP * j_zz) - (LAMBDA_CHOP * j_xz)**2
         foam_input = -jacobian + FOAM_INTENSITY
         decay = FOAM_DECAY * DT / torch.clamp(foam_input, 0.5, None)
-        accumulation = self.foam - decay
-        self.foam = torch.clamp(torch.max(accumulation, foam_input), 0.0, 1.0)
+        self.foam = torch.clamp(torch.max(self.foam - decay, foam_input), 0.0, 1.0)
 
         return h_scaled, dx_tensor, self.foam.contiguous()
 

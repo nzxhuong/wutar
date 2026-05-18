@@ -10,7 +10,7 @@ uniform vec3 cam_pos;
 uniform samplerCube skybox;
 uniform sampler2D foam_map; 
 void main() {
-    float texel = 1.0 / 1024.0;
+    float texel = 1.0 / 512.0;
     float h_l = texture(height_map, v_uv + vec2(-texel, 0.0)).r;
     float h_r = texture(height_map, v_uv + vec2( texel, 0.0)).r;
     float h_d = texture(height_map, v_uv + vec2(0.0, -texel)).r;
@@ -35,7 +35,7 @@ void main() {
     vec3 final_color = ambient + water_scatter + reflection_color + spec * vec3(3.688, 2.656, 1.931) * fresnel;
     float foam = texture(foam_map, v_uv).r;
     vec3 foam_color = vec3(1.0, 1.0, 1.0);
-    float foam_blend = smoothstep(0.0, 0.65, foam);
+    float foam_blend = smoothstep(0.0, 0.7, foam);
     final_color = mix(final_color, foam_color, foam_blend) * max(light_color, vec3(0.4));
 
     f_color = vec4(final_color, 1.0);

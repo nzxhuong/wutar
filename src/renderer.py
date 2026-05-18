@@ -59,8 +59,8 @@ class WaveRenderer:
             raise e
     
     def _setup_geometry(self):
-        x = np.linspace(-L/2, L/2, GRID_SIZE)
-        y = np.linspace(-L/2, L/2, GRID_SIZE)
+        x = np.linspace(-plane_length/2, plane_length/2, GRID_SIZE)
+        y = np.linspace(-plane_length/2, plane_length/2, GRID_SIZE)
         xx, yy = np.meshgrid(x, y)
         vertices = np.stack([xx.ravel(), yy.ravel()], axis=-1).astype('f4')
         
